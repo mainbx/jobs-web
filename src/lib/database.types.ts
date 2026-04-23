@@ -31,6 +31,7 @@ export type Database = {
           is_remote: boolean;
           relevant: boolean;
           tier: string | null;
+          effective_posted_at: string | null;
           description: string;
           first_seen: string;
           last_seen: string;

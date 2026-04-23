@@ -2,8 +2,8 @@
 
 /**
  * Dropdown for the "posted within" filter. Writes to the `d` URL param.
- * Only jobs whose `posted_at` is non-empty AND falls within the window
- * are kept (server-side filter, see `src/app/page.tsx`).
+ * Server-side filtering uses `effective_posted_at`: board `posted_at`
+ * when available, otherwise `first_seen` (see `src/app/page.tsx`).
  */
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";

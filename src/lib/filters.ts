@@ -237,26 +237,17 @@ export const DATE_RANGES: { value: DateRange; label: string }[] = [
 ];
 
 /**
- * Floors for the "Posted within" filter. The UI filters on two
- * columns simultaneously so no row is hidden for lack of a
- * `posted_at` — see the compound `.or(...)` in `app/page.tsx`:
+ * Floor for the "Posted within" filter. The UI filters on
+ * `effective_posted_at`, a backend-populated TIMESTAMPTZ:
  *
- *   (posted_at known AND posted_at >= postedText)
- *   OR (posted_at empty AND first_seen >= iso)
+ *   posted_at when the board exposes one, else first_seen
  *
- * `postedText` is the bytewise-compatible format of the backend's
- * `normalize_posted_at` output: `YYYY-MM-DDTHH:MM:SS+00:00`, no
- * fractional seconds, explicit +00:00 offset. Matching byte-for-byte
- * is required because `posted_at` is a TEXT column and PostgREST's
- * `gte` is a lexicographic compare.
- *
- * `iso` is a full ISO-8601 with millis + Z suffix, fine for the
- * `first_seen` TIMESTAMPTZ column (native comparison).
+ * A single indexed timestamp avoids the old slow compound query across
+ * `posted_at` TEXT and `first_seen` TIMESTAMPTZ.
  *
  * Returns `null` when the range is "any" (no floor).
  */
 export interface DateFloors {
-  postedText: string;
   iso: string;
 }
 
@@ -270,8 +261,7 @@ export function dateRangeFloors(range: DateRange): DateFloors | null {
   if (d === undefined) return null;
   const floor = new Date(Date.now() - d * 24 * 60 * 60 * 1000);
   const iso = floor.toISOString(); // "2026-04-22T05:30:34.730Z"
-  const postedText = iso.slice(0, 19) + "+00:00"; // "2026-04-22T05:30:34+00:00"
-  return { iso, postedText };
+  return { iso };
 }
 
 

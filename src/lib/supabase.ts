@@ -1,7 +1,8 @@
 /**
  * Browser-safe Supabase client. Uses the anon key; RLS on the Supabase
- * side restricts what this caller can read to `relevant = true` rows of
- * `public.jobs` and the `public.scrape_runs_latest` table.
+ * side restricts what this caller can read to the public feed slice:
+ * `us_or_remote_eligible = true AND relevant = true` rows of `public.jobs`
+ * and the `public.scrape_runs_latest` table.
  *
  * For server-side reads we could build a second client here that uses
  * the service-role key, but v1 doesn't need it — the public data is

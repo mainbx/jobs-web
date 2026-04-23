@@ -8,8 +8,9 @@
  * the new filters. Filter UI (SearchBar / KeywordChips / DateFilter /
  * RemoteFilter / Pagination) are client components that just edit the URL.
  *
- * RLS policy `jobs_public_read` already scopes anon reads to
- * `relevant = true`, so we never pass that filter from the app.
+ * RLS policy `jobs_public_read` already scopes anon reads to the public
+ * feed slice (`us_or_remote_eligible = true AND relevant = true`). The
+ * app still sends the US/remote filter as a belt-and-braces guard.
  */
 
 import { supabase } from "@/lib/supabase";
@@ -57,7 +58,7 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
   // Pagination: `count: 'estimated'` (not 'exact') so PostgREST reads
   // the planner's reltuples estimate instead of doing a fresh
   // COUNT(*) under RLS. Under Supabase's 8s anon statement timeout,
-  // exact counts on 28k+ rows can breach when the indexes are mid
+  // exact counts on the feed slice can breach when the indexes are mid
   // rebuild (e.g. a scrape+sync is running) — and a failing query
   // presents as a silent 0-row page for the user.
   //
