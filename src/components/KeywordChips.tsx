@@ -1,23 +1,22 @@
 "use client";
 
 /**
- * Horizontal row of keyword chips + ad-hoc keyword input.
+ * Collapsible keyword-chip panel.
+ *
+ * The filter row gets a compact toggle ("Keywords ▾" with a selected
+ * count), and the full chip grid + ad-hoc input expands below only
+ * when the user clicks it. Default is collapsed so the feed isn't
+ * crowded by 60+ chips wrapping onto multiple rows.
  *
  * Chips are two flavors:
  *   - **Built-ins** from `KEYWORDS` in `lib/filters.ts` — fixed labels
- *     (Software, Backend, Robotics, …).
- *   - **Custom** — user-entered values that aren't in the catalog. Stored
- *     in the same `?k=…` URL param (comma-separated) and rendered with
- *     their raw text as the label, a distinct outline, and a "×"
- *     remover.
+ *     (Software, Backend, Robotics, GPU, Applied Science, …).
+ *   - **Custom** — user-entered values that aren't in the catalog.
+ *     Stored in the same `?k=…` URL param (comma-separated) and
+ *     rendered with a dashed emerald outline and a "×" remover.
  *
  * Both flavors become title-ILIKE substring matches in the server-side
- * query (`keywordOrClause`). Combined with OR logic.
- *
- * Add flow:
- *   click "+ add keyword" → input appears → type text → Enter or click
- *   ✓ → chip toggles on. Enter on an empty input closes it without
- *   adding.
+ * query (`keywordOrClause`), combined with OR logic.
  */
 
 import { useState, useRef, useEffect, type KeyboardEvent } from "react";
@@ -34,6 +33,10 @@ export function KeywordChips() {
   const selected = new Set(
     (params.get("k") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   );
+
+  // Default: panel closed. Auto-open when the URL carries any keyword
+  // so a deep-linked filter is immediately visible + editable.
+  const [open, setOpen] = useState<boolean>(selected.size > 0);
 
   // Custom chips = currently-selected keywords that aren't in the
   // built-in catalog. They persist in the URL just like built-in chips.
@@ -65,8 +68,8 @@ export function KeywordChips() {
 
   function addCustom(raw: string) {
     const clean = raw.trim().toLowerCase();
-    // Empty input, duplicate, or contains the delimiter we use for
-    // storage — all rejected.
+    // Empty, duplicate, or contains the delimiter we use for storage
+    // — all rejected.
     if (!clean || selected.has(clean) || clean.includes(",")) return;
     const next = new Set(selected);
     next.add(clean);
@@ -82,55 +85,88 @@ export function KeywordChips() {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {KEYWORDS.map(({ label, match }) => {
-        const on = selected.has(match);
-        return (
-          <button
-            key={match}
-            type="button"
-            onClick={() => toggle(match)}
-            className={
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors " +
-              (on
-                ? "border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-                : "border-zinc-300 bg-white text-zinc-700 hover:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500")
-            }
-          >
-            {label}
-          </button>
-        );
-      })}
-
-      {/* Custom chips — dashed outline differentiates them from built-ins,
-          and a "×" inline button removes without toggling the whole URL. */}
-      {customChips.map((match) => (
-        <span
-          key={`custom-${match}`}
-          className="inline-flex items-center gap-1 rounded-full border border-dashed border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950 dark:text-emerald-200"
-        >
-          <span>{match}</span>
-          <button
-            type="button"
-            onClick={() => removeCustom(match)}
-            className="-mr-1 rounded-full px-1 leading-none text-emerald-700 hover:bg-emerald-200 dark:text-emerald-300 dark:hover:bg-emerald-900"
-            aria-label={`Remove keyword ${match}`}
-          >
-            ×
-          </button>
-        </span>
-      ))}
-
-      <AddKeywordButton onAdd={addCustom} />
-
-      {selected.size > 0 && (
+    <div className="space-y-2">
+      {/* Toggle bar */}
+      <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={clearAll}
-          className="rounded-full px-3 py-1 text-xs text-zinc-500 underline-offset-2 hover:underline dark:text-zinc-400"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-controls="keyword-panel"
+          className="flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-800 transition-colors hover:border-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"
         >
-          clear
+          <span>Keywords</span>
+          {selected.size > 0 && (
+            <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-xs font-semibold text-white dark:bg-zinc-100 dark:text-zinc-900">
+              {selected.size}
+            </span>
+          )}
+          <span
+            className="text-xs text-zinc-500 transition-transform dark:text-zinc-400"
+            style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
+            aria-hidden="true"
+          >
+            ▾
+          </span>
         </button>
+
+        {selected.size > 0 && (
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-xs text-zinc-500 underline-offset-2 hover:underline dark:text-zinc-400"
+          >
+            clear all
+          </button>
+        )}
+      </div>
+
+      {/* Expanded panel */}
+      {open && (
+        <div
+          id="keyword-panel"
+          className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/50"
+        >
+          {KEYWORDS.map(({ label, match }) => {
+            const on = selected.has(match);
+            return (
+              <button
+                key={match}
+                type="button"
+                onClick={() => toggle(match)}
+                className={
+                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors " +
+                  (on
+                    ? "border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                    : "border-zinc-300 bg-white text-zinc-700 hover:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-500")
+                }
+              >
+                {label}
+              </button>
+            );
+          })}
+
+          {/* Custom chips — dashed emerald outline differentiates them from
+              built-ins; inline "×" removes without collapsing the panel. */}
+          {customChips.map((match) => (
+            <span
+              key={`custom-${match}`}
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-emerald-600 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950 dark:text-emerald-200"
+            >
+              <span>{match}</span>
+              <button
+                type="button"
+                onClick={() => removeCustom(match)}
+                className="-mr-1 rounded-full px-1 leading-none text-emerald-700 hover:bg-emerald-200 dark:text-emerald-300 dark:hover:bg-emerald-900"
+                aria-label={`Remove keyword ${match}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+
+          <AddKeywordButton onAdd={addCustom} />
+        </div>
       )}
     </div>
   );

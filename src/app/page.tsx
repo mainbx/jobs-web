@@ -54,10 +54,6 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
   // rows from the mirror, so in practice every row in Supabase is
   // already US-eligible. The explicit filter here is belt-and-braces.
   //
-  // Sort strategy: dated postings first (`posted_at DESC`), then
-  // everything else by `last_seen DESC`. `posted_at` is TEXT with '' for
-  // unknown — in DESC order, empty strings sort to the bottom.
-  //
   // Pagination: `count: 'estimated'` (not 'exact') so PostgREST reads
   // the planner's reltuples estimate instead of doing a fresh
   // COUNT(*) under RLS. Under Supabase's 8s anon statement timeout,
@@ -65,14 +61,18 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
   // rebuild (e.g. a scrape+sync is running) — and a failing query
   // presents as a silent 0-row page for the user.
   //
-  // Sort: we order by `last_seen DESC` only, which is covered by
-  // `idx_jobs_relevant_last_seen (relevant, last_seen DESC)` — the
-  // RLS USING clause (relevant = TRUE) lets the planner walk the
-  // index directly. Adding a secondary sort on `posted_at` pushes
-  // the planner to an unindexed multi-column sort that times out
-  // under load. `last_seen DESC` tracks recency well enough (we
-  // scrape every 12h); rows with a real `posted_at` still surface
-  // via the "posted Xh ago" badge rendered per-row.
+  // Sort: `effective_posted_at DESC`, covered by the dedicated
+  // `idx_jobs_effective_posted_at` index. This column is populated
+  // by `supabase_sync._effective_posted_at` as `posted_at` parsed to
+  // TIMESTAMPTZ when the board exposes one, else `first_seen`.
+  // That's the user-visible "newest first" semantics: a just-
+  // discovered job (no posted_at) with first_seen 5 min ago beats a
+  // board-posted job from 1 day ago; among board-dated jobs, the
+  // most recent posting wins. Single-column sort on a single index
+  // stays well under the 3s anon timeout even when a scrape+sync
+  // is running. Previously ordered by `last_seen DESC`, but that
+  // collapsed to processing order once the daily cron stamped every
+  // active job with today's timestamp within the same ~15 min window.
   const from = (state.page - 1) * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1; // inclusive → exactly PAGE_SIZE rows
   let q = supabase
@@ -82,7 +82,7 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
       { count: "estimated" },
     )
     .eq("us_or_remote_eligible", true)
-    .order("last_seen", { ascending: false })
+    .order("effective_posted_at", { ascending: false })
     .range(from, to);
 
   // Free-text search — match against title OR company (ILIKE substring
@@ -98,28 +98,17 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
   const kwClause = keywordOrClause(state.keywords);
   if (kwClause) q = q.or(kwClause);
 
-  // Date range: compound filter so we honor the user's "posted
-  // within" intent while not silently hiding the ~30% of rows that
-  // have no `posted_at`.
-  //
-  //   (posted_at known AND posted_at >= floor) OR
-  //   (posted_at empty AND first_seen >= floor)
-  //
-  // Rows where the employer-reported post date is known but OLD are
-  // correctly excluded (so a 79d-old PDT Partners posting we just
-  // started scraping yesterday doesn't show under "Last 24 hours").
-  // Rows without a post date fall back to `first_seen` — the best
-  // freshness proxy we have, and TIMESTAMPTZ NOT NULL on every row.
-  //
-  // Implementation note: `posted_at` is TEXT, so the floor has to
-  // match the backend's ISO format byte-for-byte for PostgREST's
-  // lexicographic `gte` to produce the right answer — see
-  // `dateRangeFloors` in lib/filters.ts.
+  // Date range: filter on the precomputed `effective_posted_at`
+  // column, which `supabase_sync` populates as `posted_at` parsed
+  // as TIMESTAMPTZ when known, else `first_seen`. Single indexed
+  // range scan via `idx_jobs_effective_posted_at` — well under the
+  // 3s anon statement timeout. The compound `OR` we used before
+  // (posted_at TEXT compare + first_seen TIMESTAMPTZ compare) was
+  // forcing a sequential scan that routinely breached timeout on
+  // the 24h filter.
   const floors = dateRangeFloors(state.posted);
   if (floors) {
-    q = q.or(
-      `and(posted_at.neq.,posted_at.gte.${floors.postedText}),and(posted_at.eq.,first_seen.gte.${floors.iso})`,
-    );
+    q = q.gte("effective_posted_at", floors.iso);
   }
 
   // Remote filter — two-state. "all" leaves it off.
@@ -149,7 +138,7 @@ async function getFeed(state: FilterState): Promise<FeedResult> {
         "canonical_key, company, title, posting_url, location, us_or_remote_eligible, is_remote, last_seen, posted_at",
       )
       .eq("us_or_remote_eligible", true)
-      .order("last_seen", { ascending: false })
+      .order("effective_posted_at", { ascending: false })
       .range(from, to);
     if (retry.error) return { jobs: [], totalCount: 0 };
     return {
