@@ -52,9 +52,34 @@ export type Database = {
           synced_at: string;
         };
       };
+      scrape_health: {
+        Row: {
+          company: string;
+          /**
+           * Rollup of the latest drift / scrape state. Drives the
+           * `/health` dashboard icon: green / yellow / red / grey.
+           */
+          status: "healthy" | "warning" | "failing" | "unknown";
+          /**
+           * Comma-joined sorted list of alert-kind tokens that fired
+           * (e.g. ``"drop_30pct,stuck_at_zero"``). Empty string when
+           * status is ``healthy`` / ``unknown``.
+           */
+          alert_kind: string;
+          last_scraped_at: string | null;
+          scraped_jobs: number;
+          relevant_jobs: number;
+          mirror_jobs: number;
+          detail: string;
+          updated_at: string;
+        };
+      };
     };
   };
 };
+
+/** One scrape-health row used by the /health dashboard. */
+export type ScrapeHealth = Database["public"]["Tables"]["scrape_health"]["Row"];
 
 /** Convenience alias for a single open-job row. */
 export type Job = Database["public"]["Tables"]["jobs"]["Row"];
