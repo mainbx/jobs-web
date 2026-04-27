@@ -69,26 +69,59 @@ interface HealthCounts {
   unknown: number;
 }
 
-async function fetchHealth(): Promise<{ rows: ScrapeHealth[]; counts: HealthCounts; updatedAt: string | null }> {
-  const { data, error } = await supabase
-    .from("scrape_health")
-    .select(
-      "company, status, alert_kind, last_scraped_at, scraped_jobs, relevant_jobs, mirror_jobs, detail, updated_at",
-    )
-    .order("company", { ascending: true });
+interface JobTotals {
+  // Number of canonical rows actually visible to users in the feed.
+  // Comes from a HEAD count against ``public.jobs`` — that table is
+  // already filtered by RLS to ``us_or_remote_eligible AND relevant``,
+  // so its row count IS the user-facing feed size.
+  feed: number;
+  // Sum of ``relevant_jobs`` across the per-company logs. Useful as
+  // "matches scraped today" — it slightly over-counts because a job
+  // surfaced through both a VC network and a direct board appears in
+  // both rows; the canonical-key dedup happens at SQLite-replay time
+  // and is not reflected here. Treat as a scraping-throughput signal,
+  // not a feed-size signal.
+  relevantScrapedToday: number;
+}
 
-  if (error) {
+async function fetchHealth(): Promise<{
+  rows: ScrapeHealth[];
+  counts: HealthCounts;
+  totals: JobTotals;
+  updatedAt: string | null;
+}> {
+  const [healthResult, feedCount] = await Promise.all([
+    supabase
+      .from("scrape_health")
+      .select(
+        "company, status, alert_kind, last_scraped_at, scraped_jobs, relevant_jobs, mirror_jobs, detail, updated_at",
+      )
+      .order("company", { ascending: true }),
+    // ``head: true`` returns just the count without bodies — cheap.
+    // ``count: 'exact'`` is fine here because /health is operator-
+    // facing, not in the user feed's hot path.
+    supabase.from("jobs").select("*", { count: "exact", head: true }),
+  ]);
+
+  if (healthResult.error) {
     // Table might not exist yet during the brief window between
     // shipping this code and applying the schema migration. Render
     // a friendly empty-state instead of a 500.
-    return { rows: [], counts: { healthy: 0, warning: 0, failing: 0, unknown: 0 }, updatedAt: null };
+    return {
+      rows: [],
+      counts: { healthy: 0, warning: 0, failing: 0, unknown: 0 },
+      totals: { feed: 0, relevantScrapedToday: 0 },
+      updatedAt: null,
+    };
   }
 
-  const rows = (data ?? []) as ScrapeHealth[];
+  const rows = (healthResult.data ?? []) as ScrapeHealth[];
   const counts: HealthCounts = { healthy: 0, warning: 0, failing: 0, unknown: 0 };
+  let relevantScrapedToday = 0;
   let mostRecent: string | null = null;
   for (const r of rows) {
     counts[r.status] = (counts[r.status] ?? 0) + 1;
+    relevantScrapedToday += r.relevant_jobs ?? 0;
     if (r.updated_at && (!mostRecent || r.updated_at > mostRecent)) {
       mostRecent = r.updated_at;
     }
@@ -101,7 +134,12 @@ async function fetchHealth(): Promise<{ rows: ScrapeHealth[]; counts: HealthCoun
     return so !== 0 ? so : a.company.localeCompare(b.company);
   });
 
-  return { rows, counts, updatedAt: mostRecent };
+  return {
+    rows,
+    counts,
+    totals: { feed: feedCount.count ?? 0, relevantScrapedToday },
+    updatedAt: mostRecent,
+  };
 }
 
 function StatusDot({ status }: { status: ScrapeHealth["status"] }) {
@@ -116,8 +154,9 @@ function StatusDot({ status }: { status: ScrapeHealth["status"] }) {
 }
 
 export default async function HealthPage() {
-  const { rows, counts, updatedAt } = await fetchHealth();
+  const { rows, counts, totals, updatedAt } = await fetchHealth();
   const total = rows.length;
+  const numberFmt = new Intl.NumberFormat("en-US");
   const updatedLabel =
     updatedAt
       ? new Date(updatedAt).toLocaleString("en-US", {
@@ -148,7 +187,7 @@ export default async function HealthPage() {
           </div>
         ) : (
           <>
-            <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+            <div className="mb-2 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
               <span className="flex items-center gap-2">
                 <StatusDot status="failing" />
                 {counts.failing} failing
@@ -167,6 +206,27 @@ export default async function HealthPage() {
               </span>
               <span className="text-zinc-400 dark:text-zinc-500">
                 · {total} configured companies
+              </span>
+            </div>
+
+            {/*
+             * Totals row — answers "how big is the feed right now?" at
+             * a glance. ``feed`` is the canonical mirror size (what
+             * users see); ``relevantScrapedToday`` is sum of per-
+             * company relevant_jobs, useful as a throughput proxy
+             * (slight over-count when one job is surfaced through both
+             * a VC network and a direct board — the canonical-key
+             * dedup happens after this is recorded).
+             */}
+            <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+              <span>
+                <span className="font-semibold text-zinc-900 dark:text-zinc-50">
+                  {numberFmt.format(totals.feed)}
+                </span>{" "}
+                jobs in feed
+              </span>
+              <span className="text-zinc-400 dark:text-zinc-500">
+                · {numberFmt.format(totals.relevantScrapedToday)} relevant scraped today
               </span>
             </div>
 
