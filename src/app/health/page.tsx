@@ -28,6 +28,19 @@ export const metadata = {
   description: "Per-company scrape health and drift alerts.",
 };
 
+// Render on every request — without this, Next.js statically renders
+// the page at build time, so the first deploy that ran before
+// `scrape_health` was populated locked in an "empty state" snapshot
+// and the CDN served it forever. The data freshness here is bounded
+// by Supabase reads (~50 ms), so per-request rendering is fine.
+//
+// Next.js v16 with `cacheComponents` would require a different
+// approach (the route-segment `dynamic` flag is removed under that
+// flag) — see `node_modules/next/dist/docs/01-app/02-guides/
+// caching-without-cache-components.md`. This project doesn't have
+// `cacheComponents` enabled, so the legacy directive applies.
+export const dynamic = "force-dynamic";
+
 const STATUS_ORDER: Record<ScrapeHealth["status"], number> = {
   failing: 0,
   warning: 1,
