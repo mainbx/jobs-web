@@ -237,8 +237,25 @@ export default async function HealthPage() {
                   className="flex items-center gap-3 px-5 py-3"
                 >
                   <StatusDot status={row.status} />
-                  <span className="text-sm text-zinc-900 dark:text-zinc-50">
+                  <span className="flex-1 text-sm text-zinc-900 dark:text-zinc-50">
                     {row.company}
+                  </span>
+                  {/*
+                   * Per-company contribution to the feed. ``mirror_jobs``
+                   * is what actually reaches Supabase for this company
+                   * (relevant + US-eligible) — i.e. how many rows the
+                   * user sees on / from this employer right now. A
+                   * count of 0 is useful signal: a "healthy" 0 means
+                   * the board genuinely has no listings; a "warning" or
+                   * "failing" 0 means we should be looking at it.
+                   *
+                   * Tabular-nums keeps the digits aligned in a column
+                   * even at proportional font widths, so the eye can
+                   * skim down the list and spot outliers (zeros,
+                   * suspiciously-low counts) at a glance.
+                   */}
+                  <span className="text-sm tabular-nums text-zinc-500 dark:text-zinc-400">
+                    {numberFmt.format(row.mirror_jobs ?? 0)}
                   </span>
                 </li>
               ))}
