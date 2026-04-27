@@ -127,11 +127,21 @@ async function fetchHealth(): Promise<{
     }
   }
 
-  // Sort: failing → warning → unknown → healthy, then alpha. People
-  // come to /health to triage what's broken, so put broken at the top.
+  // Sort: failing → warning → unknown → healthy (primary), then by
+  // mirror_jobs descending (secondary), then company alpha (tertiary
+  // for ties at the same count). The status grouping puts broken at
+  // the top so /health acts as a triage queue; the count secondary
+  // means within each group the biggest contributors float up — so
+  // a glance at "Healthy" shows you who's pulling the most weight,
+  // and a glance at "Warning" shows you the heavy-hitters that have
+  // a low-grade alert (which matter more than a quiet board flagged
+  // for a missing external_id).
   rows.sort((a, b) => {
-    const so = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
-    return so !== 0 ? so : a.company.localeCompare(b.company);
+    const statusDelta = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+    if (statusDelta !== 0) return statusDelta;
+    const countDelta = (b.mirror_jobs ?? 0) - (a.mirror_jobs ?? 0);
+    if (countDelta !== 0) return countDelta;
+    return a.company.localeCompare(b.company);
   });
 
   return {
