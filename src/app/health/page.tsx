@@ -90,18 +90,31 @@ async function fetchHealth(): Promise<{
   totals: JobTotals;
   updatedAt: string | null;
 }> {
-  const [healthResult, feedCount] = await Promise.all([
-    supabase
+  // ``current_mirror_jobs`` was added 2026-04-27 — try the rich
+  // SELECT first; on PGREST 42703 ("column does not exist") fall
+  // back to the legacy field set so the page still renders during
+  // the rolling-forward window before the migration lands.
+  const RICH_SELECT =
+    "company, status, alert_kind, last_scraped_at, scraped_jobs, relevant_jobs, mirror_jobs, current_mirror_jobs, detail, updated_at";
+  const LEGACY_SELECT =
+    "company, status, alert_kind, last_scraped_at, scraped_jobs, relevant_jobs, mirror_jobs, detail, updated_at";
+
+  let healthResult = await supabase
+    .from("scrape_health")
+    .select(RICH_SELECT)
+    .order("company", { ascending: true });
+  if (healthResult.error?.code === "42703") {
+    healthResult = await supabase
       .from("scrape_health")
-      .select(
-        "company, status, alert_kind, last_scraped_at, scraped_jobs, relevant_jobs, mirror_jobs, detail, updated_at",
-      )
-      .order("company", { ascending: true }),
-    // ``head: true`` returns just the count without bodies — cheap.
-    // ``count: 'exact'`` is fine here because /health is operator-
-    // facing, not in the user feed's hot path.
-    supabase.from("jobs").select("*", { count: "exact", head: true }),
-  ]);
+      .select(LEGACY_SELECT)
+      .order("company", { ascending: true });
+  }
+  // ``head: true`` returns just the count without bodies — cheap.
+  // ``count: 'exact'`` is fine here because /health is operator-
+  // facing, not in the user feed's hot path.
+  const feedCount = await supabase
+    .from("jobs")
+    .select("*", { count: "exact", head: true });
 
   if (healthResult.error) {
     // Table might not exist yet during the brief window between
@@ -128,18 +141,18 @@ async function fetchHealth(): Promise<{
   }
 
   // Sort: failing → warning → unknown → healthy (primary), then by
-  // mirror_jobs descending (secondary), then company alpha (tertiary
-  // for ties at the same count). The status grouping puts broken at
-  // the top so /health acts as a triage queue; the count secondary
-  // means within each group the biggest contributors float up — so
-  // a glance at "Healthy" shows you who's pulling the most weight,
-  // and a glance at "Warning" shows you the heavy-hitters that have
-  // a low-grade alert (which matter more than a quiet board flagged
-  // for a missing external_id).
+  // current_mirror_jobs descending (secondary), then company alpha
+  // (tertiary for ties). Sorting on the *current* count rather than
+  // today's contribution matters most for the failing band: a Tesla
+  // outage with 3,856 still-live jobs ranks above a Micron outage
+  // with 0 still-live, even though both have ``mirror_jobs=0`` today.
+  // Within healthy, current ≈ today, so the sort is the same.
   rows.sort((a, b) => {
     const statusDelta = STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
     if (statusDelta !== 0) return statusDelta;
-    const countDelta = (b.mirror_jobs ?? 0) - (a.mirror_jobs ?? 0);
+    const aCount = a.current_mirror_jobs ?? a.mirror_jobs ?? 0;
+    const bCount = b.current_mirror_jobs ?? b.mirror_jobs ?? 0;
+    const countDelta = bCount - aCount;
     if (countDelta !== 0) return countDelta;
     return a.company.localeCompare(b.company);
   });
@@ -251,21 +264,36 @@ export default async function HealthPage() {
                     {row.company}
                   </span>
                   {/*
-                   * Per-company contribution to the feed. ``mirror_jobs``
-                   * is what actually reaches Supabase for this company
-                   * (relevant + US-eligible) — i.e. how many rows the
-                   * user sees on / from this employer right now. A
-                   * count of 0 is useful signal: a "healthy" 0 means
-                   * the board genuinely has no listings; a "warning" or
-                   * "failing" 0 means we should be looking at it.
+                   * Two-number view: ``today | current``.
+                   *   - today    = ``mirror_jobs``  (this run's
+                   *     contribution; collapses to 0 on a failed
+                   *     scrape because no rows were touched)
+                   *   - current  = ``current_mirror_jobs`` (rows in
+                   *     the live mirror right now; survives a failed
+                   *     scrape because closure didn't run)
                    *
-                   * Tabular-nums keeps the digits aligned in a column
-                   * even at proportional font widths, so the eye can
-                   * skim down the list and spot outliers (zeros,
-                   * suspiciously-low counts) at a glance.
+                   * On a successful scrape the two match and the
+                   * format reads like ``5,025 | 5,025``. On a failed
+                   * scrape (Tesla blocked by Akamai today) it reads
+                   * ``0 | 3,856`` — telling the operator "the feed
+                   * still has yesterday's data, the scraper just
+                   * failed today."
+                   *
+                   * Backward compat: ``current_mirror_jobs`` may be
+                   * null on rows that pre-date the 2026-04-27
+                   * migration; in that case the second number falls
+                   * back to ``mirror_jobs`` so the format stays valid.
+                   *
+                   * Tabular-nums keeps the digits aligned even at
+                   * proportional font widths so the eye can skim
+                   * down the list and spot outliers at a glance.
                    */}
                   <span className="text-sm tabular-nums text-zinc-500 dark:text-zinc-400">
                     {numberFmt.format(row.mirror_jobs ?? 0)}
+                    <span className="mx-1.5 text-zinc-300 dark:text-zinc-600">|</span>
+                    <span className="text-zinc-900 dark:text-zinc-50">
+                      {numberFmt.format(row.current_mirror_jobs ?? row.mirror_jobs ?? 0)}
+                    </span>
                   </span>
                 </li>
               ))}

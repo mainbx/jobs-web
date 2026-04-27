@@ -67,9 +67,30 @@ export type Database = {
            */
           alert_kind: string;
           last_scraped_at: string | null;
+          /** Raw rows fetched in today's scrape run. */
           scraped_jobs: number;
+          /** Today's matches that survived the relevance matcher. */
           relevant_jobs: number;
+          /**
+           * Today's contribution to the mirror — relevant + US-eligible
+           * rows from this run. Goes to 0 on a failed scrape because
+           * no rows were touched. Use ``current_mirror_jobs`` for the
+           * actual current feed size.
+           */
           mirror_jobs: number;
+          /**
+           * Rows currently in the live mirror for this source_company
+           * regardless of today's scrape outcome. Survives a failed
+           * scrape because the close-stale logic in
+           * ``storage._mark_missing_sources_with_conn`` is gated
+           * behind ``status == "completed"``.
+           *
+           * Optional — added 2026-04-27. Older rows that pre-date the
+           * ``2026_04_27_current_mirror_jobs.sql`` migration return
+           * ``null``; the dashboard falls back to ``mirror_jobs`` in
+           * that case.
+           */
+          current_mirror_jobs: number | null;
           detail: string;
           updated_at: string;
         };
